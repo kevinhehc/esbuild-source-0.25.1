@@ -40,6 +40,7 @@ import (
 	"github.com/evanw/esbuild/internal/xxhash"
 )
 
+// 结构体表示扫描过程中的单个文件
 type scannerFile struct {
 	// If "AbsMetadataFile" is present, this will be filled out with information
 	// about this file in JSON format. This is a partial JSON file that will be
@@ -70,13 +71,14 @@ type Bundle struct {
 	// operation. It is used as a prefix for the unique keys assigned to every
 	// chunk during linking. These unique keys are used to identify each chunk
 	// before the final output paths have been computed.
+	// 每次打包操作的唯一随机字符串前缀
 	uniqueKeyPrefix string
 
-	fs          fs.FS
-	res         *resolver.Resolver
-	files       []scannerFile
-	entryPoints []graph.EntryPoint
-	options     config.Options
+	fs          fs.FS              // 文件系统接口
+	res         *resolver.Resolver // 解析器实例
+	files       []scannerFile      // 扫描的文件列表
+	entryPoints []graph.EntryPoint // 入口点列表
+	options     config.Options     // 配置选项
 }
 
 type parseArgs struct {
@@ -256,6 +258,7 @@ func parseFile(args parseArgs) {
 		}
 	}()
 
+	// 根据loader的类型选择不同的解析器
 	switch loader {
 	case config.LoaderJS, config.LoaderEmpty:
 		ast, ok := args.caches.JSCache.Parse(args.log, source, js_parser.OptionsFromConfig(&args.options))
@@ -1285,6 +1288,17 @@ func generateUniqueKeyPrefix() (string, error) {
 // of import paths which are resolved to module identifiers (i.e. "onResolve"
 // in the plugin API). Each unique module identifier is loaded once (i.e.
 // "onLoad" in the plugin API).
+
+// 功能：
+// 把所有入口模块、依赖模块扫描一遍。
+// 为每个模块建立 ast.File（抽象语法树 + 符号表）。
+// 提取导入(imports)、导出(exports)、符号(Symbols)、路径信息。
+// 做的事：
+// 记录所有模块的 imports 和 exports
+// 建立符号依赖关系（Ref对象）
+// 发现新依赖的模块继续递归扫描
+// 简单来说：
+// 扫描阶段就是构建模块依赖图（Dependency Graph）！
 func ScanBundle(
 	call config.APICall,
 	log logger.Log,
@@ -1443,6 +1457,10 @@ const (
 )
 
 // This returns the source index of the resulting file
+// 解析单个文件并将其添加到模块图中
+// 检查文件是否已经被解析过
+// 如果没有，则分配一个源索引
+// 启动一个 goroutine 来解析文件
 func (s *scanner) maybeParseFile(
 	resolveResult resolver.ResolveResult,
 	prettyPath string,
@@ -2785,6 +2803,7 @@ func (s *scanner) validateTLA(sourceIndex uint32) tlaCheck {
 	return result.tlaCheck
 }
 
+// 通过配置指定文件扩展名与 loader 的映射关系
 func DefaultExtensionToLoaderMap() map[string]config.Loader {
 	return map[string]config.Loader{
 		"":            config.LoaderJS, // This represents files without an extension
@@ -2881,6 +2900,7 @@ type Linker func(
 	dataForSourceMaps func() []DataForSourceMap,
 ) []graph.OutputFile
 
+// 准备数据并调用链接器生成最终输出
 func (b *Bundle) Compile(log logger.Log, timer *helpers.Timer, mangleCache map[string]interface{}, link Linker) ([]graph.OutputFile, string) {
 	timer.Begin("Compile phase")
 	defer timer.End("Compile phase")

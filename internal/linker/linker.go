@@ -224,6 +224,11 @@ func wrappedLog(log logger.Log) logger.Log {
 	return log
 }
 
+// 1、扫描导入和导出
+// 2、执行树摇（tree shaking）和代码分割
+// 3、计算块（chunks）
+// 4、计算跨块依赖
+// 5、生成最终输出文件
 func Link(
 	options *config.Options,
 	timer *helpers.Timer,
