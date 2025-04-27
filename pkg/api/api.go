@@ -376,7 +376,22 @@ type OutputFile struct {
 }
 
 // Documentation: https://esbuild.github.io/api/#build
+// 打包模式
 func Build(options BuildOptions) BuildResult {
+	// parse options
+	//↓
+	//resolve entry points
+	//↓
+	//for each entry
+	//    - parse AST
+	//    - build module graph
+	//    - analyze imports/exports
+	//↓
+	//generate chunks
+	//↓
+	//apply output naming (including rename)
+	//↓
+	//emit files
 	start := time.Now()
 
 	ctx, errors := contextImpl(options)
@@ -463,7 +478,13 @@ type TransformResult struct {
 }
 
 // Documentation: https://esbuild.github.io/api/#transform
+// 单文件 transform模式
 func Transform(input string, options TransformOptions) TransformResult {
+	//parse source code
+	//↓
+	//apply syntax transform
+	//↓
+	//return JS code as string
 	return transformImpl(input, options)
 }
 
