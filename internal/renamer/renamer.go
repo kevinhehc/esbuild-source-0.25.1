@@ -12,6 +12,18 @@ import (
 	"github.com/evanw/esbuild/internal/js_lexer"
 )
 
+//1. 先收集保留名字（ComputeReservedNames）
+//2. 根据用户配置，选择不同的 Renamer
+//   - 如果 minify=true，选用 MinifyRenamer
+//   - 如果 minify=false，选用 noOpRenamer
+//3. 分析作用域，记录符号使用频率
+//4. 按策略（频率高优先、作用域隔离等）给变量分配短名字
+//5. 最后打印输出时应用新名字
+
+// 把所有关键词、严格模式保留字、不能重命名的符号找出来，防止后面起冲突
+// 先把所有 JS 的关键字（for, if, await, switch 等）和严格模式下保留字收集起来。
+// 再把所有 unbound（未绑定的）符号和被标记为 MustNotBeRenamed 的符号也收集进去。
+// 最后生成一个 reservedNames 的map，在命名时避免生成这些名字。
 func ComputeReservedNames(moduleScopes []*js_ast.Scope, symbols ast.SymbolMap) map[string]uint32 {
 	names := make(map[string]uint32)
 
@@ -60,9 +72,11 @@ type Renamer interface {
 	NameForSymbol(ref ast.Ref) string
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////
 // noOpRenamer
-
+// 简单的 Renamer。
+// 不管任何变量，全部返回原本的 OriginalName。
+// 主要用于 debug模式，或者不做minify时用。
 type noOpRenamer struct {
 	symbols ast.SymbolMap
 }
@@ -80,6 +94,16 @@ func (r *noOpRenamer) NameForSymbol(ref ast.Ref) string {
 
 ////////////////////////////////////////////////////////////////////////////////
 // MinifyRenamer
+// 这是 esbuild压缩时最重要的 Renamer，处理逻辑：
+//记录所有符号的使用频率（AccumulateSymbolUseCounts）
+//对使用频率高的符号分配更短的名字
+//名字分配顺序：
+//a, b, c, ..., z, aa, ab, ac, ..., zz, aaa, ...
+//如果变量用于 JSX，则名字首字母必须是大写（比如 A, B...）
+//保护关键字（不能生成 if, for 这些作为变量名）
+//私有字段（private fields）前面加 # （比如 #a, #b）
+//特别注意：
+//分配新名字时，先按出现次数排序，高频出现的变量优先拿最短的名字！
 
 type symbolSlot struct {
 	name               string
@@ -87,6 +111,7 @@ type symbolSlot struct {
 	needsCapitalForJSX uint32 // This is really a bool but needs to be atomic
 }
 
+// 最小化重命名（根据使用频率分配短名字）
 type MinifyRenamer struct {
 	reservedNames        map[string]uint32
 	slots                [4][]symbolSlot
@@ -174,6 +199,7 @@ func (a StableSymbolCountArray) Less(i int, j int) bool {
 	return ai.Ref.InnerIndex < aj.Ref.InnerIndex
 }
 
+// 记录所有符号的使用频率（AccumulateSymbolUseCounts）
 func (r *MinifyRenamer) AccumulateSymbolUseCounts(
 	topLevelSymbols *StableSymbolCountArray,
 	symbolUses map[ast.Ref]js_ast.SymbolUse,
@@ -397,9 +423,15 @@ func (a slotAndCountArray) Less(i int, j int) bool {
 	return ai.count > aj.count || (ai.count == aj.count && ai.slot < aj.slot)
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////
 // NumberRenamer
-
+// 专门用于**分作用域（scope）**的小范围内的命名。
+// 每个作用域建立自己的名字集合。
+// 作用域内部防止重名，父作用域允许不同子作用域复用名字。
+// 如果发生名字冲突，会自动加数字后缀（比如 name2, name3）。
+// 适用于：
+// 复杂嵌套作用域的情况（比如函数套函数）。
+// 并行分配（用了Go协程 sync.WaitGroup 并发处理不同文件）。
 type NumberRenamer struct {
 	symbols ast.SymbolMap
 	root    numberScope
@@ -627,9 +659,12 @@ func (s *numberScope) findUnusedName(name string, ns ast.SlotNamespace) string {
 	return name
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////
 // ExportRenamer
-
+// 专门用于**出口(export)**的符号重命名。
+// 避免 export {a, a} 这种冲突。
+// 如果有冲突，自动加数字后缀，变成 a, a2, a3, a4...
+// 也能生成极短的新名字（通过调用默认的 NameMinifier）。
 type ExportRenamer struct {
 	used  map[string]uint32
 	count int
